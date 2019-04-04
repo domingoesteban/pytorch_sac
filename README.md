@@ -6,7 +6,8 @@ Soft actor-critic (SAC) is an off-policy actor-critic deep RL algorithm that
 optimizes stochastic continuous policies defined in the maximum entropy 
 framework. 
 
-Paper: Haarnoja, 18)Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor presented at ICML 2018
+Paper: Haarnoja, T., Zhou, A., Abbeel, P., Levine, S. (2018), 
+[*Soft Actor-Critic: Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor*](https://arxiv.org/abs/1801.01290)
 
 
 ## Installation
