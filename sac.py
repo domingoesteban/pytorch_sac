@@ -1,11 +1,9 @@
-import os
 import numpy as np
 import torch
 import math
 from models import GaussianPolicy, QFunction, VFunction
 from itertools import chain
 import logger.logger as logger
-from collections import OrderedDict
 import gtimer as gt
 
 from utils import rollout, np_ify, torch_ify, interaction
@@ -23,6 +21,7 @@ class SAC(object):
     def __init__(
             self,
             env,
+            policy=None,
 
             # Learning models
             nets_hidden_sizes=(64, 64),
@@ -74,6 +73,7 @@ class SAC(object):
         """Soft Actor Critic Algorithm algorithm.
         Args:
             env (gym.Env):  OpenAI-Gym-like environment with multigoal option.
+            policy (torch.nn.module): A pytorch stochastic Gaussian Policy
             nets_hidden_sizes (list or tuple of int): Number of units in hidden layers for all the networks.
             use_q2 (bool): Use two parameterized Q-functions.
             explicit_vf (bool):
@@ -132,15 +132,18 @@ class SAC(object):
         self.norm_input_vfs = norm_input_vfs
 
         # Policy Network
-        self.policy = GaussianPolicy(
-            self.obs_dim,
-            self.action_dim,
-            nets_hidden_sizes,
-            non_linear=nets_nonlinear_op,
-            final_non_linear='linear',
-            batch_norm=False,
-            input_normalization=norm_input_pol,
-        )
+        if policy is None:
+            self.policy = GaussianPolicy(
+                self.obs_dim,
+                self.action_dim,
+                nets_hidden_sizes,
+                non_linear=nets_nonlinear_op,
+                final_non_linear='linear',
+                batch_norm=False,
+                input_normalization=norm_input_pol,
+            )
+        else:
+            self.policy = policy
 
         # Value Function Networks
         self.qf1 = QFunction(
@@ -240,14 +243,16 @@ class SAC(object):
         # ###### #
         # Alphas #
         # ###### #
-        self.entropy_scale = torch.tensor(entropy_scale, device=self.torch_device)
+        self.entropy_scale = torch.tensor(entropy_scale,
+                                          device=self.torch_device)
         if tgt_entro is None:
             tgt_entro = -self.action_dim
         self.tgt_entro = torch.tensor(tgt_entro, device=self.torch_device)
         self._auto_alpha = auto_alpha
         self.max_alpha = max_alpha
         self.min_alpha = min_alpha
-        self.log_alpha = torch.zeros(1, device=self.torch_device, requires_grad=True)
+        self.log_alpha = torch.zeros(1, device=self.torch_device,
+                                     requires_grad=True)
 
         # ########## #
         # Optimizers #
@@ -312,18 +317,14 @@ class SAC(object):
         self.num_iters = 0
 
         # Log variables
-        self.first_log = True
-        self.log_qvalues_error = 0
-        self.log_vvalues_error = 0
-        self.log_policies_error = 0
-        self.log_entro = torch.zeros(self.batch_size)
-        self.log_mean = torch.zeros((self.batch_size, self.action_dim))
-        self.log_std = torch.zeros((self.batch_size, self.action_dim))
-        self.log_eval_rewards = np.zeros(self.eval_rollouts)
-        self.log_eval_returns = np.zeros(self.eval_rollouts)
-
-        if not logger.get_snapshot_dir():
-            logger.setup_logger(exp_prefix='sac')
+        self.logging_qvalues_error = 0
+        self.logging_vvalues_error = 0
+        self.logging_policies_error = 0
+        self.logging_entropy = torch.zeros(self.batch_size)
+        self.logging_mean = torch.zeros((self.batch_size, self.action_dim))
+        self.logging_std = torch.zeros((self.batch_size, self.action_dim))
+        self.logging_eval_rewards = torch.zeros(self.eval_rollouts)
+        self.logging_eval_returns = torch.zeros(self.eval_rollouts)
 
     @property
     def trainable_models(self):
@@ -352,6 +353,11 @@ class SAC(object):
 
     def train(self, init_iteration=0):
 
+        if init_iteration == 0:
+            # Eval and log
+            self.eval()
+            self.log(write_table_header=True)
+
         gt.reset()
         gt.set_def_unique(False)
 
@@ -365,7 +371,6 @@ class SAC(object):
                 model.train()
 
             obs = self.env.reset()
-            # obs = torch_ify(obs, device=self.torch_device)
             rollout_steps = 0
             for step in range(self.train_steps):
                 if self.render:
@@ -426,14 +431,16 @@ class SAC(object):
                                    deterministic=True,
                                    )
 
-            self.log_eval_rewards[rr] = torch.tensor(rollout_info['reward']).mean()
-            self.log_eval_returns[rr] = torch.tensor(rollout_info['reward']).sum()
+            self.logging_eval_rewards[rr] = torch.tensor(
+                rollout_info['reward']).mean()
+            self.logging_eval_returns[rr] = torch.tensor(
+                rollout_info['reward']).sum()
 
             self.num_eval_interactions += 1
 
         gt.stamp('eval')
 
-        return self.log_eval_returns.mean().item()
+        return self.logging_eval_returns.mean().item()
 
     def learn(self):
         """Improve the Gaussian policy with the Soft Actor-Critic algorithm.
@@ -445,7 +452,6 @@ class SAC(object):
         # Get batch from the replay buffer
         batch = self.replay_buffer.random_batch(self.batch_size,
                                                 device=self.torch_device)
-
         # Get common data from batch
         obs = batch['observations']
         actions = batch['actions']
@@ -453,11 +459,10 @@ class SAC(object):
         rewards = batch['rewards']
         terminations = batch['terminations']
 
+        policy_prior_log_prob = 0.0  # Uniform prior  # TODO: Normal prior
+
         # Alphas
-        # alphas = self.entropy_scales*torch.clamp(self.log_alphas,
-        #                                          max=MAX_LOG_ALPHA).exp()
-        alpha = self.entropy_scale*torch.clamp(self.log_alpha.exp(),
-                                               max=self.max_alpha)
+        alpha = self.entropy_scale * self.log_alpha.exp()
 
         # Actions for batch observation
         new_actions, policy_info = self.policy(obs, deterministic=False,
@@ -472,8 +477,6 @@ class SAC(object):
                                                     deterministic=False,
                                                     return_log_prob=True)
             next_log_pi = policy_info['log_prob']
-
-        policy_prior_log_prob = 0.0  # Uniform prior  # TODO: Normal prior
 
         # ###################### #
         # Policy Evaluation Step #
@@ -495,7 +498,7 @@ class SAC(object):
                     next_q = next_q1
 
                 # Vtarget(s')
-                next_v = next_q - alpha*next_log_pi
+                next_v = next_q - alpha * next_log_pi
         else:
             with torch.no_grad():
                 # Vtarget(s')
@@ -507,13 +510,14 @@ class SAC(object):
         # Prediction Q(s,a)
         q1_pred = self.qf1(obs, actions)
         # Critic loss: Mean Squared Bellman Error (MSBE)
-        qf1_loss = 0.5*torch.mean((q1_pred - q_backup)**2, dim=0).squeeze(-1)
+        qf1_loss = \
+            0.5 * torch.mean((q1_pred - q_backup) ** 2, dim=(0,)).squeeze(-1)
 
         if self.qf2 is not None:
             q2_pred = self.qf2(obs, actions)
             # Critic loss: Mean Squared Bellman Error (MSBE)
             qf2_loss = \
-                0.5*torch.mean((q2_pred - q_backup)**2, dim=0).squeeze(-1)
+                0.5 * torch.mean((q2_pred - q_backup)**2, dim=(0,)).squeeze(-1)
         else:
             qf2_loss = 0
 
@@ -531,9 +535,9 @@ class SAC(object):
         new_q = new_q1
 
         # Policy KL loss: - (E_a[Q(s, a) + H(.)])
-        policy_kl_loss = -torch.mean(new_q - alpha*new_log_pi
+        policy_kl_loss = -torch.mean(new_q - alpha * new_log_pi
                                      + policy_prior_log_prob,
-                                     dim=0,)
+                                     dim=(0,))
         policy_regu_loss = 0  # TODO: It can include regularization of mean, std
         policy_loss = torch.sum(policy_kl_loss + policy_regu_loss)
 
@@ -542,23 +546,22 @@ class SAC(object):
         policy_loss.backward()
         self._policy_optimizer.step()
 
-        # ###################### #
-        # V-fcn improvement step #
-        # ###################### #
+        # ################################# #
+        # (Optional) V-fcn improvement step #
+        # ################################# #
         if self.vf is not None:
             v_pred = self.vf(obs)
             # Calculate Bellman Backup for Q-values
-            v_backup = new_q - alpha*new_log_pi + policy_prior_log_prob
+            v_backup = new_q - alpha * new_log_pi + policy_prior_log_prob
             v_backup.detach_()
 
             # Critic loss: Mean Squared Bellman Error (MSBE)
             vf_loss = \
-                0.5*torch.mean((v_pred - v_backup)**2, dim=0).squeeze(-1)
+                0.5 * torch.mean((v_pred - v_backup)**2, dim=(0,)).squeeze(-1)
             self.vvalues_optimizer.zero_grad()
             vvalues_loss = vf_loss
             vvalues_loss.backward()
             self.vvalues_optimizer.step()
-
 
         # ####################### #
         # Entropy Adjustment Step #
@@ -623,124 +626,74 @@ class SAC(object):
         # ######## #
         # Log data #
         # ######## #
-        self.log_policies_error = policy_loss.item()
-        self.log_qvalues_error = qvalues_loss.item()
-        self.log_vvalues_error = vvalues_loss if self.target_vf is not None else 0.
-        self.log_entro.data.copy_(-new_log_pi.squeeze(dim=-1).data)
-        self.log_mean.data.copy_(new_mean.data)
-        self.log_std.data.copy_(new_std.data)
+        self.logging_policies_error = policy_loss.item()
+        self.logging_qvalues_error = qvalues_loss.item()
+        self.logging_vvalues_error = vvalues_loss.item() if self.target_vf is not None else 0.
+        self.logging_entropy.data.copy_(-new_log_pi.squeeze(dim=-1).data)
+        self.logging_mean.data.copy_(new_mean.data)
+        self.logging_std.data.copy_(new_std.data)
 
-    def save(self):
-        snapshot_gap = logger.get_snapshot_gap()
-        snapshot_dir = logger.get_snapshot_dir()
-        snapshot_mode = logger.get_snapshot_mode()
+    def save_training_state(self):
+        """Save models
 
-        save_full_path = os.path.join(
-            snapshot_dir,
-            'models'
-        )
+        Returns:
+            None
 
-        if snapshot_mode == 'all':
-            models_dirs = list((
-                os.path.join(
-                    save_full_path,
-                    str('itr_%03d' % self.num_iters)
-                ),
-            ))
-        elif snapshot_mode == 'last':
-            models_dirs = list((
-                os.path.join(
-                    save_full_path,
-                    str('last_itr')
-                ),
-            ))
-        elif snapshot_mode == 'gap':
-            if self.num_iters % snapshot_gap == 0:
-                models_dirs = list((
-                    os.path.join(
-                        save_full_path,
-                        str('itr_%03d' % self.num_iters)
-                    ),
-                ))
-            else:
-                return
-        elif snapshot_mode == 'gap_and_last':
-            models_dirs = list((
-                os.path.join(
-                    save_full_path,
-                    str('last_itr')
-                ),
-            ))
-            if self.num_iters % snapshot_gap == 0:
-                models_dirs.append(
-                    os.path.join(
-                        save_full_path,
-                        str('itr_%03d' % self.num_iters)
-                    ),
-                )
-        else:
-            return
+        """
+        models_dict = {
+            'policy': self.policy,
+            'qf1': self.qf1,
+            'qf2': self.qf2,
+            'target_qf1': self.target_qf1,
+            'target_qf2': self.target_qf2,
+        }
+        replaceable_models_dict = {
+            'replay_buffer', self.replay_buffer,
+        }
+        logger.save_torch_models(self.num_iters, models_dict,
+                                 replaceable_models_dict)
 
-        for save_path in models_dirs:
-            # logger.log('Saving models to %s' % save_full_path)
-            if not os.path.exists(save_path):
-                os.makedirs(save_path)
-            torch.save(self.policy, save_path + '/policy.pt')
-            torch.save(self.qf1, save_path + '/qf1.pt')
-            torch.save(self.qf2, save_path + '/qf2.pt')
-            torch.save(self.target_qf1, save_path + '/target_qf1.pt')
-            torch.save(self.target_qf2, save_path + '/target_qf2.pt')
-            torch.save(self.vf, save_path + '/vf.pt')
-
-        if self.num_iters % snapshot_gap == 0 or \
-                self.num_iters == self.total_iterations - 1:
-            if not os.path.exists(save_full_path):
-                os.makedirs(save_full_path)
-            torch.save(self.replay_buffer, save_full_path + '/replay_buffer.pt')
-
-    def load(self):
+    def load_training_state(self):
         pass
 
-    def log(self):
+    def log(self, write_table_header=False):
         logger.log("Logging data in directory: %s" % logger.get_snapshot_dir())
-        # Statistics dictionary
-        statistics = OrderedDict()
 
-        statistics["Iteration"] = self.num_iters
-        statistics["Accumulated Training Steps"] = self.num_train_interactions
+        logger.record_tabular("Iteration", self.num_iters)
 
         # Training Stats to plot
-        statistics["Total Policy Error"] = self.log_policies_error
-        statistics["Total Q-Value Error"] = self.log_qvalues_error
-        statistics["Total V-Value Error"] = self.log_vvalues_error
+        logger.record_tabular("Accumulated Training Steps",
+                              self.num_train_interactions)
 
-        statistics["Alpha"] = \
-            self.log_alpha.exp().detach().cpu().numpy().item()
+        logger.record_tabular("Policy Error", self.logging_policies_error)
+        logger.record_tabular("Q-Value Error", self.logging_qvalues_error)
+        logger.record_tabular("V-Value Error", self.logging_vvalues_error)
 
-        statistics["Entropy"] = np_ify(self.log_entro.mean(dim=0))
+        logger.record_tabular("Alpha", np_ify(self.log_alpha.exp()).item())
+        logger.record_tabular("Entropy",
+                              np_ify(self.logging_entropy.mean(dim=(0,))))
 
-        act_mean = np_ify(self.log_mean.mean(dim=0))
-        act_std = np_ify(self.log_std.mean(dim=0))
+        act_mean = np_ify(self.logging_mean.mean(dim=(0,)))
+        act_std = np_ify(self.logging_std.mean(dim=(0,)))
         for aa in range(self.action_dim):
-            statistics["Mean Action %02d" % aa] = act_mean[aa]
-            statistics["Std Action %02d" % aa] = act_std[aa]
+            logger.record_tabular("Mean Action %02d" % aa, act_mean[aa])
+            logger.record_tabular("Std Action %02d" % aa, act_std[aa])
 
         # Evaluation Stats to plot
-        statistics["Test Rewards Mean"] = self.log_eval_rewards.mean()
-        statistics["Test Rewards Std"] = self.log_eval_rewards.std()
-        statistics["Test Returns Mean"] = self.log_eval_returns.mean()
-        statistics["Test Returns Std"] = self.log_eval_returns.std()
-
-        # Add Tabular data to logger
-        for key, value in statistics.items():
-            logger.record_tabular(key, value)
+        logger.record_tabular("Test Rewards Mean",
+                              np_ify(self.logging_eval_rewards.mean()))
+        logger.record_tabular("Test Rewards Std",
+                              np_ify(self.logging_eval_rewards.std()))
+        logger.record_tabular("Test Returns Mean",
+                              np_ify(self.logging_eval_returns.mean()))
+        logger.record_tabular("Test Returns Std",
+                              np_ify(self.logging_eval_returns.std()))
 
         # Add the previous times to the logger
         times_itrs = gt.get_times().stamps.itrs
-        train_time = times_itrs['train'][-1]
-        sample_time = times_itrs['sample'][-1]
-        # eval_time = times_itrs['eval'][-1] if epoch > 0 else 0
-        eval_time = times_itrs['eval'][-1] if 'eval' in times_itrs else 0
+        train_time = times_itrs.get('train', [0])[-1]
+        sample_time = times_itrs.get('sample', [0])[-1]
+        eval_time = times_itrs.get('eval', [0])[-1]
         epoch_time = train_time + sample_time + eval_time
         total_time = gt.get_times().total
         logger.record_tabular('Train Time (s)', train_time)
@@ -750,20 +703,25 @@ class SAC(object):
         logger.record_tabular('Total Train Time (s)', total_time)
 
         # Dump the logger data
-        if self.first_log:
-            logger.dump_tabular(with_prefix=False, with_timestamp=False,
-                                write_header=True)
-            self.first_log = False
-        else:
-            logger.dump_tabular(with_prefix=False, with_timestamp=False,
-                                write_header=False)
-        # Save Pytorch models
-        self.save()
+        logger.dump_tabular(with_prefix=False, with_timestamp=False,
+                            write_header=write_table_header)
+        # Save pytorch models
+        self.save_training_state()
         logger.log("----")
 
 
 class ReplayBuffer(object):
+    """Replay buffer
+
+    """
     def __init__(self, max_size, obs_dim, action_dim):
+        """
+
+        Args:
+            max_size (int): Maximum size.
+            obs_dim (int): Observation space dimension.
+            action_dim (int): Action space dimension.
+        """
         if not max_size > 1:
             raise ValueError("Invalid Maximum Replay Buffer Size: {}".format(
                 max_size)
@@ -784,6 +742,19 @@ class ReplayBuffer(object):
         self._size = 0
 
     def add_sample(self, obs, action, reward, termination, next_obs):
+        """Add a new sample to the buffer.
+
+        Args:
+            obs (np.ndarray or torch.Tensor): observation
+            action (np.ndarray or torch.Tensor): action
+            reward (np.ndarray or torch.Tensor): reward
+            termination (np.ndarray or torch.Tensor): termination or 'done'
+            next_obs (np.ndarray or torch.Tensor): next observation
+
+        Returns:
+            None
+
+        """
         self.obs_buffer[self._top] = torch_ify(obs)
         self.acts_buffer[self._top] = torch_ify(action)
         self.rewards_buffer[self._top] = torch_ify(reward)
@@ -797,6 +768,16 @@ class ReplayBuffer(object):
             self._size += 1
 
     def random_batch(self, batch_size, device=None):
+        """Get a random batch
+
+        Args:
+            batch_size (int):
+            device (torch.device):
+
+        Returns:
+            dict:
+
+        """
         if batch_size > self._size:
             raise AttributeError('Not enough samples to get. %d bigger than '
                                  'current %d!' % (batch_size, self._size))
@@ -813,6 +794,16 @@ class ReplayBuffer(object):
         return batch_dict
 
     def available_samples(self):
+        """Returns the current size of the buffer.
+
+        Returns:
+            int: Current size
+
+        """
+        return self._size
+
+    @property
+    def size(self):
         return self._size
 
 
@@ -820,14 +811,17 @@ def soft_param_update_from_to(source, target, tau):
     """Soft update of two torch Modules' parameters.
 
     Args:
-        source (torch.nn.Module):
-        target (torch.nn.Module):
+        source (torch.nn.Module): Torch module from which to copy the
+            parameters.
+        target (torch.nn.Module): Torch module to copy the parameters.
         tau (float):
 
     Returns:
+        None
 
     """
-    for target_param, source_param in zip(target.parameters(), source.parameters()):
+    for target_param, source_param in zip(target.parameters(),
+                                          source.parameters()):
         target_param.data.copy_(
             target_param.data * (1.0 - tau) + source_param.data * tau
         )
@@ -837,10 +831,11 @@ def hard_buffer_update_from_to(source, target):
     """Hard update of two torch Modules' buffers.
 
     Args:
-        source (torch.nn.Module):
-        target (torch.nn.Module):
+        source (torch.nn.Module): Torch module from which to copy the buffers.
+        target (torch.nn.Module): Torch module to copy the buffers.
 
     Returns:
+        None
 
     """
     # Buffers should be hard copy
@@ -849,24 +844,18 @@ def hard_buffer_update_from_to(source, target):
 
 
 if __name__ == '__main__':
-    import torch
     import gym
 
     total_iters = 30
     seed = 500
-    obs_dim = 10
-    act_dim = 4
-    buffer_size = 1e2
-    # device = 'cuda:0'
-    device = 'cpu'
+    buffer_size = int(1e2)
     render = False
-    # render = True
 
     env = gym.make('Pendulum-v0')
     env.seed(seed=seed)
 
-    sac = SAC(env, total_iterations=total_iters, train_steps=1500, max_horizon=1500,
-              render=render, seed=seed)
+    sac = SAC(env, total_iterations=total_iters, train_steps=1500,
+              max_horizon=1500, replay_buffer_size=buffer_size, seed=seed)
 
     # Train
     expected_accum_rewards = sac.train()
