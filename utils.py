@@ -1,7 +1,8 @@
+# This python script contains useful functions.
+
 import torch
 import numpy as np
 import time
-import gym
 
 
 def interaction(env, policy, obs, scale_pol_output=True, device='cpu',
@@ -15,9 +16,10 @@ def interaction(env, policy, obs, scale_pol_output=True, device='cpu',
         env (Env): Environment.
         policy (torch.nn.module): Policy :math:`\pi`.
         obs (np.array or torch.tensor): Current observation :math`o_t`.
+        scale_pol_output (bool): Scale policy output to (act_min, act_max)
         device (torch.device or None or str): 'cpu' or 'cuda' device.
         pol_kwargs: Policy's keyword arguments. E.g. deterministic or
-        return_log_prob.
+          return_log_prob.
 
     Returns:
         dict: A dictionary with data from the interaction.
@@ -53,7 +55,6 @@ def rollout(env, policy, max_horizon=100, fixed_horizon=True,
             render=False, return_info_dict=False,
             scale_pol_output=True,
             device='cpu',
-            end_fcn=None,
             record_video_name=None,
             **pol_kwargs):
     """Perform an interaction over a finite time.
@@ -63,12 +64,12 @@ def rollout(env, policy, max_horizon=100, fixed_horizon=True,
     Args:
         env (Env): Environment.
         policy (torch.nn.module): Policy :math:`\pi`.
-        max_horizon (int):
-        fixed_horizon (bool):
-        render (bool):
-        return_info_dict (bool):
+        max_horizon (int): Maximum number of interactions.
+        fixed_horizon (bool): Force the rollout to have a fixed horizon.
+        render (bool): Rendering or not the environment.
+        return_info_dict (bool): The function will return a dictionary with
+            the resulted interaction data.
         device (torch.device or None or str): 'cpu' or 'cuda' device.
-        end_fcn ():
         record_video_name (str or None):
         pol_kwargs: Policy's keyword arguments. E.g. deterministic.
 
@@ -84,8 +85,6 @@ def rollout(env, policy, max_horizon=100, fixed_horizon=True,
         'reward': [],
         'termination': [],
     }
-
-    intention = pol_kwargs.get('intention', None)
 
     obs = env.reset()
     if render:
@@ -150,13 +149,48 @@ def torch_ify(ndarray, device=None, dtype=torch.float32):
         torch.Tensor
 
     """
-    # return torch.from_numpy(ndarray).float().to(device).requires_grad_(requires_grad)
     if isinstance(ndarray, np.ndarray):
         return torch.from_numpy(ndarray).to(device=device, dtype=dtype)
     elif isinstance(ndarray, torch.Tensor):
         return ndarray
     else:
         return torch.as_tensor(ndarray, device=device, dtype=dtype)
+
+
+def soft_param_update_from_to(source, target, tau):
+    """Soft update of two torch Modules' parameters.
+
+    Args:
+        source (torch.nn.Module): Torch module from which to copy the
+            parameters.
+        target (torch.nn.Module): Torch module to copy the parameters.
+        tau (float):
+
+    Returns:
+        None
+
+    """
+    for target_param, source_param in zip(target.parameters(),
+                                          source.parameters()):
+        target_param.data.copy_(
+            target_param.data * (1.0 - tau) + source_param.data * tau
+        )
+
+
+def hard_buffer_update_from_to(source, target):
+    """Hard update of two torch Modules' buffers.
+
+    Args:
+        source (torch.nn.Module): Torch module from which to copy the buffers.
+        target (torch.nn.Module): Torch module to copy the buffers.
+
+    Returns:
+        None
+
+    """
+    # Buffers should be hard copy
+    for target_buff, source_buff in zip(target.buffers(), source.buffers()):
+        target_buff.data.copy_(source_buff.data)
 
 
 def string_between(string, a, b):

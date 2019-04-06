@@ -1,8 +1,8 @@
 """
-This file is basically rlkit's logger, with small changes.
+This file is basically rllab/rlkit logger, with little changes.
 
-https://github.com/vitchyr/rlkit
 https://github.com/rll/rllab
+https://github.com/vitchyr/rlkit
 """
 from enum import Enum
 from contextlib import contextmanager
@@ -189,7 +189,9 @@ def save_extra_data(data):
     """
     Data saved here will always override the last entry
 
-    :param data: Something pickle'able.
+    Returns:
+        None
+
     """
     if _snapshot_dir:
         file_name = osp.join(_snapshot_dir, 'extra_data.pkl')
@@ -197,10 +199,22 @@ def save_extra_data(data):
 
 
 def get_table_dict():
+    """Returns a dictionary from the current table.
+
+    Returns:
+        dict:
+
+    """
     return dict(_tabular)
 
 
 def get_table_key_set():
+    """Returns a set from the current table.
+
+    Returns:
+        set:
+
+    """
     return set(key for key, value in _tabular)
 
 
@@ -260,8 +274,7 @@ def dump_tabular(*args, **kwargs):
         for tabular_fd in list(_tabular_fds.values()):
             writer = csv.DictWriter(tabular_fd,
                                     fieldnames=list(tabular_dict.keys()))
-            if wh or (
-                    wh is None and tabular_fd not in _tabular_header_written):
+            if wh or (wh is None and tabular_fd not in _tabular_header_written):
                 writer.writeheader()
                 _tabular_header_written.add(tabular_fd)
             writer.writerow(tabular_dict)

@@ -53,7 +53,7 @@ def get_csv_data_and_labels(csv_file, space_separated=False):
         print("Error reading %s" % csv_file)
         sys.exit(1)
 
-    data = series.as_matrix()
+    data = series.values
     labels = list(series)
 
     return data, labels
@@ -169,7 +169,7 @@ def get_headers(csv_file):
 def get_max_action_idx(csv_file, header_label=None):
     if header_label is None:
         header_label = 'Mean Action '
-    max_value = max([int(header.split(header_label,1)[1])
+    max_value = max([int(header.split(header_label, 1)[1])
                      for header in get_headers(csv_file)
                      if header.startswith(header_label)])
     return max_value

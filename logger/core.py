@@ -4,6 +4,7 @@ import datetime
 import dateutil.tz
 from .logger import log, dict_to_safe_json, log_variant, add_tabular_output
 from .logger import set_snapshot_dir, set_snapshot_mode, set_snapshot_gap
+from .logger import set_log_stdout
 
 LOCAL_LOG_DIR = './training_logs'
 
@@ -17,23 +18,31 @@ def setup_logger(
         tabular_log_file="progress.csv",
         snapshot_mode="last",
         snapshot_gap=1,
+        log_stdout=True,
 ):
     """
 
     Args:
-        exp_prefix:
-        seed:
-        variant:
-        log_dir:
-        variant_log_file:
-        tabular_log_file:
-        snapshot_mode:
-        snapshot_gap:
+        exp_prefix (str): Experiment prefix. All experiments with this prefix
+            will have log directories be under this directory.
+        seed (int): Seed value.
+        variant (dict or None): Experiment variant dictionary.
+        log_dir (str or None): Logging directory.
+        variant_log_file (str): Experiment variant filename.
+        tabular_log_file (str): Tablular filename.
+        snapshot_mode (str): Available options: 'last', 'all', 'gap', 'gap_and_last'
+        snapshot_gap (int): Snapshot gap if 'gap' or 'gap_and_last' mode is selected.
+        log_stdout (bool): Show logging in stdout.
 
     Returns:
-        str: Name of the logging directory.
+        str: Full path name of the logging directory.
 
     """
+    set_log_stdout(log_stdout)
+    set_snapshot_mode(snapshot_mode)
+    set_snapshot_gap(snapshot_gap)
+
+    # Set log directory
     if log_dir is None:
         log_dir = LOCAL_LOG_DIR
     log_dir = create_log_dir(exp_prefix, seed=seed, base_log_dir=log_dir)
@@ -47,8 +56,6 @@ def setup_logger(
     add_tabular_output(tabular_log_path)
 
     set_snapshot_dir(log_dir)
-    set_snapshot_mode(snapshot_mode)
-    set_snapshot_gap(snapshot_gap)
 
     return log_dir
 
@@ -57,8 +64,8 @@ def create_log_dir(exp_prefix='', seed=0, base_log_dir=None):
     """Creates and returns a unique log directory.
 
     Args:
-        exp_prefix (str): All experiments with this prefix will have log
-            directories be under this directory.
+        exp_prefix (str): Experiment prefix. All experiments with this prefix
+            will have log directories be under this directory.
         seed (int): Seed number of the experiment.
         base_log_dir (str): Full path where the log directory will be created.
 
@@ -67,7 +74,7 @@ def create_log_dir(exp_prefix='', seed=0, base_log_dir=None):
 
     """
     # exp_name = create_exp_name(exp_prefix.replace("_", "-"), seed=seed)
-    exp_name = create_exp_name(exp_prefix=None, seed=seed)
+    exp_name = create_exp_name(exp_prefix='', seed=seed)
     if base_log_dir is None:
         base_log_dir = LOCAL_LOG_DIR
     log_dir = os.path.join(base_log_dir, exp_prefix.replace("_", "-"), exp_name)
@@ -78,12 +85,13 @@ def create_log_dir(exp_prefix='', seed=0, base_log_dir=None):
     return log_dir
 
 
-def create_exp_name(exp_prefix=None, seed=0):
+def create_exp_name(exp_prefix='', seed=0):
     """Create a semi-unique experiment name that has a timestamp.
 
     Args:
-        exp_prefix (str):
-        seed (int):
+        exp_prefix (str): Experiment prefix. All experiments with this prefix
+            will have log directories be under this directory.
+        seed (int): Seed value.
 
     Returns:
         str: semi-unique name.
@@ -91,7 +99,7 @@ def create_exp_name(exp_prefix=None, seed=0):
     """
     now = datetime.datetime.now(dateutil.tz.tzlocal())
     timestamp = now.strftime('%Y_%m_%d_%H_%M_%S')
-    if exp_prefix is None:
+    if exp_prefix is None or exp_prefix == '':
         return "s-%d---%s" % (seed, timestamp)
     else:
         return "%s--s-%d---%s" % (exp_prefix, seed, timestamp)

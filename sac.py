@@ -5,8 +5,10 @@ from models import GaussianPolicy, QFunction, VFunction
 from itertools import chain
 import logger.logger as logger
 import gtimer as gt
+import tqdm
 
 from utils import rollout, np_ify, torch_ify, interaction
+from utils import soft_param_update_from_to, hard_buffer_update_from_to
 
 
 class SAC(object):
@@ -27,7 +29,7 @@ class SAC(object):
             explicit_vf=False,
 
             # RL algorithm behavior
-            total_iterations=10,
+            total_episodes=10,
             train_steps=100,
             eval_rollouts=10,
             max_horizon=100,
@@ -67,14 +69,14 @@ class SAC(object):
             gpu_id=-1,
 
     ):
-        """Soft Actor Critic Algorithm algorithm.
+        """Soft Actor-Critic algorithm.
         Args:
             env (gym.Env):  OpenAI-Gym-like environment with multigoal option.
             policy (torch.nn.module): A pytorch stochastic Gaussian Policy
             nets_hidden_sizes (list or tuple of int): Number of units in hidden layers for all the networks.
             use_q2 (bool): Use two parameterized Q-functions.
             explicit_vf (bool):
-            total_iterations (int):
+            total_episodes (int):
             train_steps (int):
             eval_rollouts (int):
             max_horizon (int):
@@ -113,7 +115,7 @@ class SAC(object):
         # Algorithm hyperparameters
         self.obs_dim = np.prod(env.observation_space.shape).item()
         self.action_dim = np.prod(env.action_space.shape).item()
-        self.total_iterations = total_iterations
+        self.total_episodes = total_episodes
         self.train_steps = train_steps
         self.eval_rollouts = eval_rollouts
         self.max_horizon = max_horizon
@@ -272,10 +274,9 @@ class SAC(object):
             raise ValueError('Wrong optimizer')
 
         # Values optimizer
-        qvals_params_list = [self.qf1.parameters()]
+        qvals_params = self.qf1.parameters()
         if self.qf2 is not None:
-            qvals_params_list.append(self.qf2.parameters())
-        qvals_params = chain(*qvals_params_list)
+            qvals_params = chain(qvals_params, self.qf2.parameters())
         self.qvalues_optimizer = optimizer_class(
             qvals_params,
             lr=qf_lr,
@@ -311,7 +312,7 @@ class SAC(object):
         self.num_train_interactions = 0
         self.num_train_steps = 0
         self.num_eval_interactions = 0
-        self.num_iters = 0
+        self.num_episodes = 0
 
         # Log variables
         self.logging_qvalues_error = 0
@@ -348,9 +349,9 @@ class SAC(object):
             models.append(self.target_vf)
         return models
 
-    def train(self, init_iteration=0):
+    def train(self, init_episode=0):
 
-        if init_iteration == 0:
+        if init_episode == 0:
             # Eval and log
             self.eval()
             self.log(write_table_header=True)
@@ -358,11 +359,14 @@ class SAC(object):
         gt.reset()
         gt.set_def_unique(False)
 
-        expected_accum_rewards = np.zeros(self.total_iterations)
-        for iter in gt.timed_for(
-                range(init_iteration, self.total_iterations),
-                save_itrs=True,
-        ):
+        expected_accum_rewards = np.zeros(self.total_episodes)
+
+        episodes_iter = range(init_episode, self.total_episodes)
+        if not logger.get_log_stdout():
+            # Fancy iterable bar
+            episodes_iter = tqdm.tqdm(episodes_iter)
+
+        for iter in gt.timed_for(episodes_iter, save_itrs=True):
             # Put models in training mode
             for model in self.trainable_models:
                 model.train()
@@ -403,7 +407,7 @@ class SAC(object):
 
             self.log()
 
-            self.num_iters += 1
+            self.num_episodes += 1
 
         return expected_accum_rewards
 
@@ -508,13 +512,13 @@ class SAC(object):
         q1_pred = self.qf1(obs, actions)
         # Critic loss: Mean Squared Bellman Error (MSBE)
         qf1_loss = \
-            0.5 * torch.mean((q1_pred - q_backup) ** 2, dim=(0,)).squeeze(-1)
+            0.5 * torch.mean((q1_pred - q_backup) ** 2, dim=0).squeeze(-1)
 
         if self.qf2 is not None:
             q2_pred = self.qf2(obs, actions)
             # Critic loss: Mean Squared Bellman Error (MSBE)
             qf2_loss = \
-                0.5 * torch.mean((q2_pred - q_backup)**2, dim=(0,)).squeeze(-1)
+                0.5 * torch.mean((q2_pred - q_backup)**2, dim=0).squeeze(-1)
         else:
             qf2_loss = 0
 
@@ -534,7 +538,7 @@ class SAC(object):
         # Policy KL loss: - (E_a[Q(s, a) + H(.)])
         policy_kl_loss = -torch.mean(new_q - alpha * new_log_pi
                                      + policy_prior_log_prob,
-                                     dim=(0,))
+                                     dim=0)
         policy_regu_loss = 0  # TODO: It can include regularization of mean, std
         policy_loss = torch.sum(policy_kl_loss + policy_regu_loss)
 
@@ -554,7 +558,7 @@ class SAC(object):
 
             # Critic loss: Mean Squared Bellman Error (MSBE)
             vf_loss = \
-                0.5 * torch.mean((v_pred - v_backup)**2, dim=(0,)).squeeze(-1)
+                0.5 * torch.mean((v_pred - v_backup)**2, dim=0).squeeze(-1)
             self.vvalues_optimizer.zero_grad()
             vvalues_loss = vf_loss
             vvalues_loss.backward()
@@ -624,7 +628,8 @@ class SAC(object):
         # ######## #
         self.logging_policies_error = policy_loss.item()
         self.logging_qvalues_error = qvalues_loss.item()
-        self.logging_vvalues_error = vvalues_loss.item() if self.target_vf is not None else 0.
+        self.logging_vvalues_error = vvalues_loss.item() \
+            if self.target_vf is not None else 0.
         self.logging_entropy.data.copy_(-new_log_pi.squeeze(dim=-1).data)
         self.logging_mean.data.copy_(new_mean.data)
         self.logging_std.data.copy_(new_std.data)
@@ -642,11 +647,12 @@ class SAC(object):
             'qf2': self.qf2,
             'target_qf1': self.target_qf1,
             'target_qf2': self.target_qf2,
+            'vf': self.vf,
         }
         replaceable_models_dict = {
             'replay_buffer', self.replay_buffer,
         }
-        logger.save_torch_models(self.num_iters, models_dict,
+        logger.save_torch_models(self.num_episodes, models_dict,
                                  replaceable_models_dict)
 
     def load_training_state(self):
@@ -655,9 +661,8 @@ class SAC(object):
     def log(self, write_table_header=False):
         logger.log("Logging data in directory: %s" % logger.get_snapshot_dir())
 
-        logger.record_tabular("Iteration", self.num_iters)
+        logger.record_tabular("Episode", self.num_episodes)
 
-        # Training Stats to plot
         logger.record_tabular("Accumulated Training Steps",
                               self.num_train_interactions)
 
@@ -714,7 +719,7 @@ class ReplayBuffer(object):
         """
 
         Args:
-            max_size (int): Maximum size.
+            max_size (int): Maximum buffersize.
             obs_dim (int): Observation space dimension.
             action_dim (int): Action space dimension.
         """
@@ -803,42 +808,6 @@ class ReplayBuffer(object):
         return self._size
 
 
-def soft_param_update_from_to(source, target, tau):
-    """Soft update of two torch Modules' parameters.
-
-    Args:
-        source (torch.nn.Module): Torch module from which to copy the
-            parameters.
-        target (torch.nn.Module): Torch module to copy the parameters.
-        tau (float):
-
-    Returns:
-        None
-
-    """
-    for target_param, source_param in zip(target.parameters(),
-                                          source.parameters()):
-        target_param.data.copy_(
-            target_param.data * (1.0 - tau) + source_param.data * tau
-        )
-
-
-def hard_buffer_update_from_to(source, target):
-    """Hard update of two torch Modules' buffers.
-
-    Args:
-        source (torch.nn.Module): Torch module from which to copy the buffers.
-        target (torch.nn.Module): Torch module to copy the buffers.
-
-    Returns:
-        None
-
-    """
-    # Buffers should be hard copy
-    for target_buff, source_buff in zip(target.buffers(), source.buffers()):
-        target_buff.data.copy_(source_buff.data)
-
-
 if __name__ == '__main__':
     import gym
 
@@ -850,7 +819,7 @@ if __name__ == '__main__':
     env = gym.make('Pendulum-v0')
     env.seed(seed=seed)
 
-    sac = SAC(env, total_iterations=total_iters, train_steps=1500,
+    sac = SAC(env, total_episodes=total_iters, train_steps=1500,
               max_horizon=1500, replay_buffer_size=buffer_size, seed=seed)
 
     # Train

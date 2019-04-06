@@ -186,7 +186,7 @@ class VFunction(MLP):
 
 class GaussianPolicy(MLP):
     """
-    Hierarchical Policy
+    Gaussian Policy
     """
     def __init__(self,
                  obs_dim,
@@ -240,7 +240,9 @@ class GaussianPolicy(MLP):
 
         mean = mean_and_log_std[..., :self.output_dim]
         log_std = mean_and_log_std[..., self.output_dim:]
-        std = log_std.exp()
+        # std = log_std.exp()
+        std = clip_but_pass_gradient(log_std, LOG_SIG_MIN, LOG_SIG_MAX).exp()
+        # std = torch.clamp(log_std, LOG_SIG_MIN, LOG_SIG_MAX).exp()
 
         log_prob = None
         if deterministic:
