@@ -11,9 +11,9 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Training Arguments')
     parser.add_argument('--env_name', '-e', type=str, default='Pendulum-v0',
                         help='Gym environment name [default: Pendulum-v0]')
-    parser.add_argument('--iterations', '-i', type=int, default=30,
+    parser.add_argument('--iterations', '-i', type=int, default=3000,
                         help='Number of algorithm iterations [default: 50]')
-    parser.add_argument('--train_steps', '-s', type=int, default=1500,
+    parser.add_argument('--train_steps', '-s', type=int, default=2000,
                         help="Environment steps per iteration [default: 5000]")
     parser.add_argument('--horizon', '-n', type=int, default=1000,
                         help="Rollout maximum horizon [default: 1000]")
@@ -22,20 +22,14 @@ if __name__ == '__main__':
                              "[default: 5]")
     parser.add_argument('--render', dest='render', default=False,
                         action='store_true',
-                        help='Render environment during training '
-                             '[default: False]')
+                        help="Render environment during training "
+                             "[default: False]")
     parser.add_argument('--seed', type=int, default=610,
                         help="Seed value [default: 610]")
     parser.add_argument('--gpu', type=int, default=-1,
-                        help='GPU ID [default: -1 (cpu)]')
+                        help="GPU ID [default: -1 (cpu)]")
 
     args = parser.parse_args()
-
-    render = False
-    # render = True
-    seed = 500
-
-    env_name = 'Pendulum-v0'
 
     # Algorithm
     algo_hyperparams = dict(
@@ -76,7 +70,7 @@ if __name__ == '__main__':
         auto_alpha=True,
         max_alpha=10,
         min_alpha=0.01,
-        tgt_entro=1e0,
+        tgt_entro=None,
 
         # Others
         norm_input_pol=False,
@@ -86,18 +80,24 @@ if __name__ == '__main__':
         gpu_id=args.gpu,
     )
 
-    env = gym.make(env_name)
-    env.seed(seed=seed)
+    env = gym.make(args.env_name)
+    env.seed(seed=args.seed)
+
+    # Check if environment has continuous observation-action spaces
+    if not isinstance(env.action_space, gym.spaces.Box) \
+            and not isinstance(env.observation_space, gym.spaces.Box):
+        raise ValueError("SAC algorithm only works in environments with "
+                         "continuous observation-action spaces.")
 
     expt_variant = {
         'algo_name': 'sac',
         'algo_params': algo_hyperparams,
-        'env_name': env_name,
+        'env_name': args.env_name,
     }
 
     log_dir = setup_logger(
         exp_prefix='sac',
-        seed=seed,
+        seed=args.seed,
         variant=expt_variant,
         snapshot_mode='last',
         snapshot_gap=10,

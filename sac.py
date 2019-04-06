@@ -8,9 +8,6 @@ import gtimer as gt
 
 from utils import rollout, np_ify, torch_ify, interaction
 
-# MAX_LOG_ALPHA = 9.21034037  # Alpha=10000  Before 01/07
-MAX_LOG_ALPHA = 6.2146080984  # Alpha=500  From 09/07
-
 
 class SAC(object):
     """Soft Actor-Critic algorithm
@@ -568,7 +565,6 @@ class SAC(object):
         # ####################### #
         if self._auto_alpha:
             # NOTE: In formula is alphas and not log_alphas
-            # log_alphas = self.log_alphas.clamp(max=MAX_LOG_ALPHA)
             alphas_loss = - (self.log_alpha *
                              (new_log_pi.squeeze(-1) + self.tgt_entro
                               ).mean(dim=0).detach()

@@ -8,6 +8,7 @@ import numpy as np
 import plots
 from utils import rollout
 import gym
+from gym.wrappers import Monitor
 
 
 if __name__ == '__main__':
@@ -15,9 +16,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Evaluation Arguments')
     parser.add_argument('log_dir', type=str,
                         help='Log directory')
-    parser.add_argument('--plot', '-p', action='store_false',
+    parser.add_argument('--plot', '-p', action='store_true',
                         help="Plot the training process instead of running "
                              "in the environment.")
+    parser.add_argument('--record', '-r', action='store_true',
+                        help="Record a video from Openai-gym environment.")
     parser.add_argument('--seed', '-s', type=int, default=610,
                         help="Seed value [default: 610]")
     parser.add_argument('--horizon', '-n', type=int, default=None,
@@ -38,12 +41,28 @@ if __name__ == '__main__':
         horizon = algo_params['max_horizon']
 
     if args.plot:
+        # Plot training data
+        log_dir = args.log_dir
+        progress_file = osp.join(log_dir, 'progress.csv')
+
+        plots.plot_policy_info(progress_file,
+                               block=False)
+
+        plots.plot_eval_returns(progress_file,
+                                block=False)
+
+        input("Press a key to close the script")
+
+    else:
         if args.horizon and args.horizon > 0:
             horizon = args.horizon
 
         seed = args.seed
 
         env = gym.make(env_name)
+
+        if args.record:
+            env = Monitor(env, './video')
 
         np.random.seed(seed)
         torch.cuda.manual_seed(seed)
@@ -66,19 +85,8 @@ if __name__ == '__main__':
                 record_video_name=None,
                 deterministic=not args.stochastic)
 
-        input("Press a key to close the script")
+        if not args.record:
+            input("Press a key to close the script")
 
         env.close()
 
-    else:
-        # Plot training data
-        log_dir = args.log_dir
-        progress_file = osp.join(log_dir, 'progress.csv')
-
-        plots.plot_policy_info(progress_file,
-                               block=False)
-
-        plots.plot_eval_returns(progress_file,
-                                block=False)
-
-        input("Press a key to close the script")

@@ -25,7 +25,7 @@ pip install -r requirements.txt
 
 ## Usage
 
-- Run (train) the algorithm with a continuous observation and action 
+- Run (train) the algorithm with a continuous observation-action space
 OpenAI-gym environment (E.g. Pendulum-v0)
 
 ```

@@ -197,6 +197,17 @@ class GaussianPolicy(MLP):
                  batch_norm=False,
                  input_normalization=False,
                  ):
+        """
+
+        Args:
+            obs_dim (int):
+            action_dim (int):
+            hidden_sizes (tuple or list of int):
+            non_linear (str):
+            final_non_linear (str):
+            batch_norm (bool):
+            input_normalization (bool):
+        """
         self.input_dim = obs_dim
         self.output_dim = action_dim
         self.obs_dim = obs_dim
