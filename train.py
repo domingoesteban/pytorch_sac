@@ -10,16 +10,16 @@ from logger import setup_logger
 if __name__ == '__main__':
     # Script parameters
     parser = argparse.ArgumentParser(
-        description='Train a policy with HIU-SAC algorithm',
+        description='Train a policy with SAC algorithm',
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument('--env_name', '-e', type=str, default='Pendulum-v0',
                         help="Gym environment name")
-    parser.add_argument('--episodes', '-i', type=int, default=20,
+    parser.add_argument('--episodes', '-i', type=int, default=30,
                         help="Number of algorithm episodes(iterations)")
-    parser.add_argument('--train_steps', '-s', type=int, default=500,
+    parser.add_argument('--train_steps', '-s', type=int, default=1500,
                         help="Environment steps per iteration")
-    parser.add_argument('--horizon', '-n', type=int, default=200,
+    parser.add_argument('--horizon', '-n', type=int, default=1000,
                         help="Rollout maximum horizon")
     parser.add_argument('--evaluation_rollouts', '-r', type=int, default=5,
                         help="Number of rollouts for policy evaluation")

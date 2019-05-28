@@ -366,7 +366,7 @@ class SAC(object):
             # Fancy iterable bar
             episodes_iter = tqdm.tqdm(episodes_iter)
 
-        for iter in gt.timed_for(episodes_iter, save_itrs=True):
+        for it in gt.timed_for(episodes_iter, save_itrs=True):
             # Put models in training mode
             for model in self.trainable_models:
                 model.train()
@@ -403,7 +403,7 @@ class SAC(object):
                     obs = interaction_info['next_obs']
 
             # Evaluate current policy to check performance
-            expected_accum_rewards[iter] = self.eval()
+            expected_accum_rewards[it] = self.eval()
 
             self.log()
 
@@ -719,7 +719,7 @@ class ReplayBuffer(object):
         """
 
         Args:
-            max_size (int): Maximum buffersize.
+            max_size (int): Maximum buffer size.
             obs_dim (int): Observation space dimension.
             action_dim (int): Action space dimension.
         """
